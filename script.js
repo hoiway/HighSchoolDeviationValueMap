@@ -1,7 +1,7 @@
 // script.js
 (async function () {
     const GEOJSON_URL = './prefectures.json';
-    const CAPITALS_URL = './capitals.json'; // ★ 県庁所在地データ
+    const CAPITALS_URL = './capitals.json';
     const PADDING = 20;
     const ZOOM_STEP = 1.12;
 
@@ -12,29 +12,34 @@
     let features = [];
     let bounds = null;
 
-    // ビュー変換
+    // ビュー
     let scale = 1, translateX = 0, translateY = 0;
-    let minScale = 25;          // 最小倍率
-    let maxScale = 1000;        // 初期fit後に調整
+    let minScale = 25;
+    let maxScale = 1000;
 
-    // マウス操作
+    // マウス
     let isDragging = false, lastX = 0, lastY = 0, dragMoved = false;
 
-    // タッチ操作
+    // タッチ
     let isTouchPanning = false, lastTouchX = 0, lastTouchY = 0;
     let isPinching = false, pinchStartDist = 0, pinchStartScale = 1, pinchCenterX = 0, pinchCenterY = 0;
 
+    // タップ判定（クリック相当）
+    const TAP_MOVE_THRESH = 6;   // px
+    const TAP_TIME_THRESH = 350; // ms（長押しは無視）
+    let tapStartX = 0, tapStartY = 0, tapMoved = false, tapStartTime = 0;
+
     // 状態
     let ready = false;
-    let selectedFeature = null; // クリック選択済みの都道府県
+    let selectedFeature = null;
 
-    // ===== capitals.json 読み込み（DMS→度に変換） =====
+    // ========== capitals.json ==========
     const dmsToDeg = (s) => {
-        if (typeof s === 'number') return s; // 既に度の場合も許容
+        if (typeof s === 'number') return s;
         const [d, m, sec] = String(s).split(':').map(Number);
         return d + (m || 0) / 60 + (sec || 0) / 3600;
     };
-    let capitalsMap = {}; // { '北海道': {city, lonDeg, latDeg, elev_m} }
+    let capitalsMap = {};
     async function loadCapitals() {
         const resp = await fetch(CAPITALS_URL, { cache: 'no-cache' });
         if (!resp.ok) throw new Error('failed to load capitals.json: ' + resp.status);
@@ -46,7 +51,7 @@
         }));
     }
 
-    // ===== 高DPI対応／リサイズ =====
+    // ========== 高DPI & リサイズ ==========
     function resizeCanvas() {
         const dpr = window.devicePixelRatio || 1;
         const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -57,9 +62,8 @@
     }
     new ResizeObserver(resizeCanvas).observe(canvas);
 
-    // ===== データ読込 =====
+    // ========== データ読込 ==========
     try {
-        // 並行ロード
         const [prefResp] = await Promise.all([
             fetch(GEOJSON_URL, { cache: 'no-cache' }),
             loadCapitals(),
@@ -68,8 +72,8 @@
         gj = await prefResp.json();
     } catch (e) { console.error(e); return; }
 
-    // ===== 投影（上下左右修正のため lat を反転） =====
-    const lonLatToXY = ([lon, lat]) => [lon, -lat];
+    // ========== 投影 & 前処理 ==========
+    const lonLatToXY = ([lon, lat]) => [lon, -lat]; // 上下左右の修正でlat反転
     const projectCoords = (coords) => (typeof coords[0] === 'number') ? lonLatToXY(coords) : coords.map(projectCoords);
 
     features = gj.features.map(f => ({ type: f.geometry.type, coords: projectCoords(f.geometry.coordinates), props: f.properties }));
@@ -90,7 +94,6 @@
         const sx = (w - 2 * PADDING) / worldW;
         const sy = (h - 2 * PADDING) / worldH;
         scale = Math.min(sx, sy);
-        // 中央寄せ
         const offsetX = (w - worldW * scale) / 2;
         const offsetY = (h - worldH * scale) / 2;
         translateX = -bounds.minX * scale + offsetX;
@@ -145,7 +148,7 @@
         }
     }
 
-    // ===== 描画 =====
+    // ========== 描画 ==========
     function draw() {
         if (!ready) return;
         const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -161,7 +164,7 @@
             else { for (const poly of f.coords) { drawPolygon(poly); ctx.fill(); ctx.stroke(); } }
         }
 
-        // ラベル & 県庁所在地
+        // ラベル＆県庁所在地（選択時）
         if (selectedFeature) {
             const name = selectedFeature.props?.N03_001 || '';
             const [cx, cy] = featureCentroid(selectedFeature);
@@ -189,27 +192,27 @@
         }
     }
 
-    // ===== 入力（マウス：パン＆クリック判定改善） =====
+    // ========== 入力（マウス：パン & クリック） ==========
     canvas.addEventListener('mousedown', e => {
         isDragging = true; dragMoved = false;
         lastX = e.clientX; lastY = e.clientY;
     });
     window.addEventListener('mouseup', e => {
-        if (isDragging && !dragMoved) handleClick(e); // 移動してなければクリック扱い
+        if (isDragging && !dragMoved) handlePointerSelect(e.clientX, e.clientY);
         isDragging = false;
     });
     window.addEventListener('mousemove', e => {
         if (!ready) return;
         if (isDragging) {
             const dx = e.clientX - lastX, dy = e.clientY - lastY;
-            if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved = true; // 3pxしきい値
+            if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved = true;
             translateX += dx; translateY += dy;
             lastX = e.clientX; lastY = e.clientY;
             constrainPan(); draw();
         }
     });
 
-    // ホイールズーム
+    // ========== ホイールズーム ==========
     canvas.addEventListener('wheel', e => {
         e.preventDefault();
         if (!ready) return;
@@ -225,11 +228,92 @@
         constrainPan(); draw();
     }, { passive: false });
 
-    // クリック処理 → 命中＆アニメーションズーム
-    function handleClick(e) {
-        if (!ready) return;
+    // ========== タッチ（スマホ：パン・ピンチ・タップ） ==========
+    const distance = (t1, t2) => Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+    const midpoint = (t1, t2, rect) => ({ x: ((t1.clientX + t2.clientX) / 2) - rect.left, y: ((t1.clientY + t2.clientY) / 2) - rect.top });
+
+    canvas.addEventListener('touchstart', e => {
+        e.preventDefault(); if (!ready) return;
         const rect = canvas.getBoundingClientRect();
-        const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+
+        if (e.touches.length === 1) {
+            // 1本指：パン or タップ開始
+            isTouchPanning = true; isPinching = false;
+            lastTouchX = e.touches[0].clientX; lastTouchY = e.touches[0].clientY;
+
+            tapStartX = lastTouchX; tapStartY = lastTouchY;
+            tapMoved = false; tapStartTime = performance.now();
+        } else if (e.touches.length === 2) {
+            // 2本指：ピンチ開始（タップは無効化）
+            isTouchPanning = false; isPinching = true;
+            tapMoved = true; // タップ扱いしない
+            pinchStartDist = distance(e.touches[0], e.touches[1]);
+            pinchStartScale = scale;
+            const m = midpoint(e.touches[0], e.touches[1], rect);
+            pinchCenterX = m.x; pinchCenterY = m.y;
+        }
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', e => {
+        e.preventDefault(); if (!ready) return;
+        const rect = canvas.getBoundingClientRect();
+
+        if (isPinching && e.touches.length === 2) {
+            const dist = distance(e.touches[0], e.touches[1]);
+            let newScale = Math.max(minScale, Math.min(maxScale, pinchStartScale * (dist / pinchStartDist)));
+            const k = newScale / scale;
+            translateX = pinchCenterX - (pinchCenterX - translateX) * k;
+            translateY = pinchCenterY - (pinchCenterY - translateY) * k;
+            scale = newScale; constrainPan(); draw();
+        } else if (isTouchPanning && e.touches.length === 1) {
+            const cx = e.touches[0].clientX, cy = e.touches[0].clientY;
+            const dx = cx - lastTouchX, dy = cy - lastTouchY;
+            if (Math.abs(cx - tapStartX) > TAP_MOVE_THRESH || Math.abs(cy - tapStartY) > TAP_MOVE_THRESH) {
+                tapMoved = true; // タップではなくパン扱い
+            }
+            translateX += dx; translateY += dy;
+            lastTouchX = cx; lastTouchY = cy; constrainPan(); draw();
+        } else if (e.touches.length === 2) {
+            // 途中から2本になった場合
+            isTouchPanning = false; isPinching = true;
+            tapMoved = true;
+            pinchStartDist = distance(e.touches[0], e.touches[1]);
+            pinchStartScale = scale;
+            const m = midpoint(e.touches[0], e.touches[1], rect);
+            pinchCenterX = m.x; pinchCenterY = m.y;
+        }
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', e => {
+        e.preventDefault();
+        if (!ready) return;
+
+        // タップ判定：1本指で開始し、移動が小さく、短時間で、ピンチ中でない
+        const now = performance.now();
+        if (!isPinching && e.touches.length === 0 && !tapMoved && (now - tapStartTime) <= TAP_TIME_THRESH) {
+            const touch = e.changedTouches[0];
+            handlePointerSelect(touch.clientX, touch.clientY);
+        }
+
+        // 状態遷移
+        if (e.touches.length === 0) { isTouchPanning = false; isPinching = false; }
+        else if (e.touches.length === 1) {
+            isPinching = false; isTouchPanning = true;
+            lastTouchX = e.touches[0].clientX; lastTouchY = e.touches[0].clientY;
+            tapStartX = lastTouchX; tapStartY = lastTouchY;
+            tapMoved = false; tapStartTime = performance.now();
+        }
+    }, { passive: false });
+
+    canvas.addEventListener('touchcancel', e => {
+        e.preventDefault(); isTouchPanning = false; isPinching = false; tapMoved = true;
+    }, { passive: false });
+
+    // ========== 選択（クリック/タップ共通） ==========
+    function handlePointerSelect(clientX, clientY) {
+        const rect = canvas.getBoundingClientRect();
+        const mx = clientX - rect.left, my = clientY - rect.top;
+
         let hit = null;
         for (const f of features) {
             if (f.type === 'Polygon') {
@@ -248,7 +332,7 @@
         zoomToFeatureAnimated(hit);
     }
 
-    // アニメーションズーム（easeOutCubic）
+    // ========== アニメーションズーム ==========
     function zoomToFeatureAnimated(f) {
         const fb = featureBounds(f);
         const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -278,56 +362,7 @@
         requestAnimationFrame(animate);
     }
 
-    // タッチ（スマホ：ピンチ＆パン）
-    const distance = (t1, t2) => Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-    const midpoint = (t1, t2, rect) => ({ x: ((t1.clientX + t2.clientX) / 2) - rect.left, y: ((t1.clientY + t2.clientY) / 2) - rect.top });
-
-    canvas.addEventListener('touchstart', e => {
-        e.preventDefault(); if (!ready) return;
-        const rect = canvas.getBoundingClientRect();
-        if (e.touches.length === 1) {
-            isTouchPanning = true; isPinching = false;
-            lastTouchX = e.touches[0].clientX; lastTouchY = e.touches[0].clientY;
-        } else if (e.touches.length === 2) {
-            isTouchPanning = false; isPinching = true;
-            pinchStartDist = distance(e.touches[0], e.touches[1]);
-            pinchStartScale = scale;
-            const m = midpoint(e.touches[0], e.touches[1], rect);
-            pinchCenterX = m.x; pinchCenterY = m.y;
-        }
-    }, { passive: false });
-
-    canvas.addEventListener('touchmove', e => {
-        e.preventDefault(); if (!ready) return;
-        const rect = canvas.getBoundingClientRect();
-        if (isPinching && e.touches.length === 2) {
-            const dist = distance(e.touches[0], e.touches[1]);
-            let newScale = Math.max(minScale, Math.min(maxScale, pinchStartScale * (dist / pinchStartDist)));
-            const k = newScale / scale;
-            translateX = pinchCenterX - (pinchCenterX - translateX) * k;
-            translateY = pinchCenterY - (pinchCenterY - translateY) * k;
-            scale = newScale; constrainPan(); draw();
-        } else if (isTouchPanning && e.touches.length === 1) {
-            const cx = e.touches[0].clientX, cy = e.touches[0].clientY;
-            translateX += (cx - lastTouchX); translateY += (cy - lastTouchY);
-            lastTouchX = cx; lastTouchY = cy; constrainPan(); draw();
-        } else if (e.touches.length === 2) {
-            isTouchPanning = false; isPinching = true;
-            pinchStartDist = distance(e.touches[0], e.touches[1]);
-            pinchStartScale = scale;
-            const m = midpoint(e.touches[0], e.touches[1], rect);
-            pinchCenterX = m.x; pinchCenterY = m.y;
-        }
-    }, { passive: false });
-
-    canvas.addEventListener('touchend', e => {
-        e.preventDefault();
-        if (e.touches.length === 0) { isTouchPanning = false; isPinching = false; }
-        else if (e.touches.length === 1) { isPinching = false; isTouchPanning = true; lastTouchX = e.touches[0].clientX; lastTouchY = e.touches[0].clientY; }
-    }, { passive: false });
-
-    canvas.addEventListener('touchcancel', e => { e.preventDefault(); isTouchPanning = false; isPinching = false; }, { passive: false });
-
+    // ========== パン制限 ==========
     function constrainPan() {
         const w = canvas.clientWidth, h = canvas.clientHeight;
         const minX = bounds.minX * scale + translateX, minY = bounds.minY * scale + translateY;
@@ -339,7 +374,7 @@
         if (maxY < margin) translateY += margin - maxY;
     }
 
-    // 初期表示
+    // ========== 初期表示 ==========
     fitToCanvas();
     ready = true;
     resizeCanvas();
