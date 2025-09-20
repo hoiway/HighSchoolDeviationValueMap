@@ -1,3 +1,4 @@
+/* 画面全体をキャンバスに */
 html,
 body {
     height: 100%;
@@ -5,10 +6,13 @@ body {
     background: #f7f7fb;
 }
 
-/* スマホの既定ジェスチャ抑止（必要なら） */
+/* iOS Safari での不意の拡大/選択/長押しメニューを抑止 */
 html,
 body {
     overscroll-behavior: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
 }
 
 #wrap {
@@ -21,6 +25,8 @@ body {
     height: 100%;
     display: block;
     background: #ffffff;
-    /* モバイルのブラウザ標準ジェスチャを無効化（ピンチ等はJSで処理） */
+
+    /* Pointer Events のパン/ピンチを自前で扱うため、ブラウザ既定を無効化 */
     touch-action: none;
+    /* iOS 13.4+ で有効 */
 }
