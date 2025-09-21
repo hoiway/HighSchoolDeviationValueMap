@@ -212,7 +212,11 @@
     function draw() {
         if (!ready) return;
         const w = canvas.clientWidth, h = canvas.clientHeight;
+
+        // 背景を淡いグレーで塗る
         ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = '#f5f5f5';
+        ctx.fillRect(0, 0, w, h);
 
         ctx.strokeStyle = '#334155';
         ctx.lineWidth = 1;
